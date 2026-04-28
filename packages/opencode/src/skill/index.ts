@@ -73,6 +73,48 @@ export interface Interface {
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
 }
 
+export const render = Effect.fn("Skill.render")(function* (info: Info) {
+  const dir = path.dirname(info.location)
+  const files = yield* Effect.tryPromise({
+    try: () =>
+      Glob.scan("**/*", {
+        cwd: dir,
+        absolute: true,
+        include: "file",
+        dot: true,
+        symlink: true,
+      }),
+    catch: (error) => error,
+  }).pipe(
+    Effect.map((files) =>
+      files
+        .filter((file) => !file.endsWith(`${path.sep}SKILL.md`))
+        .slice(0, 10)
+        .map((file) => `<file>${file}</file>`)
+        .join("\n"),
+    ),
+  )
+
+  return {
+    dir,
+    output: [
+      `<skill_content name="${info.name}">`,
+      `# Skill: ${info.name}`,
+      "",
+      info.content.trim(),
+      "",
+      `Base directory for this skill: ${pathToFileURL(dir).href}`,
+      "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+      "Note: file list is sampled.",
+      "",
+      "<skill_files>",
+      files,
+      "</skill_files>",
+      "</skill_content>",
+    ].join("\n"),
+  }
+})
+
 const add = Effect.fnUntraced(function* (state: State, match: string, bus: Bus.Interface) {
   const md = yield* Effect.tryPromise({
     try: () => ConfigMarkdown.parse(match),

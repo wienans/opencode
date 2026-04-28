@@ -53,6 +53,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { EffectBridge } from "@/effect/bridge"
+import { Skill } from "@/skill"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -108,6 +109,7 @@ export const layer = Layer.effect(
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
     const llm = yield* LLM.Service
+    const skill = yield* Skill.Service
     const runner = Effect.fn("SessionPrompt.runner")(function* () {
       return yield* EffectBridge.make()
     })
@@ -1527,45 +1529,62 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         throw error
       }
       const agentName = cmd.agent ?? input.agent ?? (yield* agents.defaultAgent())
-
-      const raw = input.arguments.match(argsRegex) ?? []
-      const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
-      const templateCommand = yield* Effect.promise(async () => cmd.template)
-
-      const placeholders = templateCommand.match(placeholderRegex) ?? []
-      let last = 0
-      for (const item of placeholders) {
-        const value = Number(item.slice(1))
-        if (value > last) last = value
+      const session = yield* sessions.get(input.sessionID)
+      const agent = yield* agents.get(agentName)
+      if (!agent) {
+        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
+        yield* bus.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
+        throw error
       }
 
-      const withArgs = templateCommand.replaceAll(placeholderRegex, (_, index) => {
-        const position = Number(index)
-        const argIndex = position - 1
-        if (argIndex >= args.length) return ""
-        if (position === last) return args.slice(argIndex).join(" ")
-        return args[argIndex]
-      })
-      const usesArgumentsPlaceholder = templateCommand.includes("$ARGUMENTS")
-      let template = withArgs.replaceAll("$ARGUMENTS", input.arguments)
+      const template = yield* Effect.gen(function* () {
+        if (cmd.source === "skill") {
+          yield* permission
+            .ask({
+              sessionID: input.sessionID,
+              permission: "skill",
+              patterns: [input.command],
+              always: [input.command],
+              metadata: {},
+              ruleset: Permission.merge(agent.permission, session.permission ?? []),
+            })
+            .pipe(Effect.orDie)
+          const info = yield* skill.get(input.command)
+          if (!info) return input.arguments.trim()
+          const rendered = yield* Skill.render(info)
+          return [rendered.output, input.arguments.trim()].filter(Boolean).join("\n\n")
+        }
 
-      if (placeholders.length === 0 && !usesArgumentsPlaceholder && input.arguments.trim()) {
-        template = template + "\n\n" + input.arguments
-      }
-
-      const shellMatches = ConfigMarkdown.shell(template)
-      if (shellMatches.length > 0) {
+        const raw = input.arguments.match(argsRegex) ?? []
+        const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
+        const templateCommand = yield* Effect.promise(async () => cmd.template)
+        const placeholders = templateCommand.match(placeholderRegex) ?? []
+        const last = placeholders.reduce((max, item) => Math.max(max, Number(item.slice(1))), 0)
+        const withArgs = templateCommand.replaceAll(placeholderRegex, (_, index) => {
+          const position = Number(index)
+          const argIndex = position - 1
+          if (argIndex >= args.length) return ""
+          if (position === last) return args.slice(argIndex).join(" ")
+          return args[argIndex]
+        })
+        const usesArgumentsPlaceholder = templateCommand.includes("$ARGUMENTS")
+        const template = withArgs.replaceAll("$ARGUMENTS", input.arguments)
+        const withPrompt =
+          placeholders.length === 0 && !usesArgumentsPlaceholder && input.arguments.trim()
+            ? template + "\n\n" + input.arguments
+            : template
+        const shellMatches = ConfigMarkdown.shell(withPrompt)
+        if (shellMatches.length === 0) return withPrompt.trim()
         const cfg = yield* config.get()
         const sh = Shell.preferred(cfg.shell)
         const results = yield* Effect.promise(() =>
-          Promise.all(
-            shellMatches.map(async ([, cmd]) => (await Process.text([cmd], { shell: sh, nothrow: true })).text),
-          ),
+          Promise.all(shellMatches.map(async ([, cmd]) => (await Process.text([cmd], { shell: sh, nothrow: true })).text)),
         )
         let index = 0
-        template = template.replace(bashRegex, () => results[index++])
-      }
-      template = template.trim()
+        return withPrompt.replace(bashRegex, () => results[index++]).trim()
+      })
 
       const taskModel = yield* Effect.gen(function* () {
         if (cmd.model) return Provider.parseModel(cmd.model)
@@ -1578,15 +1597,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       })
 
       yield* getModel(taskModel.providerID, taskModel.modelID, input.sessionID)
-
-      const agent = yield* agents.get(agentName)
-      if (!agent) {
-        const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-        const error = new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
-        yield* bus.publish(Session.Event.Error, { sessionID: input.sessionID, error: error.toObject() })
-        throw error
-      }
 
       const templateParts = yield* resolvePromptParts(template)
       const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true

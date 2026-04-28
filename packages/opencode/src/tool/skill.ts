@@ -1,8 +1,4 @@
-import path from "path"
-import { pathToFileURL } from "url"
 import { Effect, Schema } from "effect"
-import * as Stream from "effect/Stream"
-import { Ripgrep } from "../file/ripgrep"
 import { Skill } from "../skill"
 import * as Tool from "./tool"
 import DESCRIPTION from "./skill.txt"
@@ -15,7 +11,6 @@ export const SkillTool = Tool.define(
   "skill",
   Effect.gen(function* () {
     const skill = yield* Skill.Service
-    const rg = yield* Ripgrep.Service
 
     return {
       description: DESCRIPTION,
@@ -36,37 +31,14 @@ export const SkillTool = Tool.define(
             metadata: {},
           })
 
-          const dir = path.dirname(info.location)
-          const base = pathToFileURL(dir).href
-          const limit = 10
-          const files = yield* rg.files({ cwd: dir, follow: false, hidden: true, signal: ctx.abort }).pipe(
-            Stream.filter((file) => !file.includes("SKILL.md")),
-            Stream.map((file) => path.resolve(dir, file)),
-            Stream.take(limit),
-            Stream.runCollect,
-            Effect.map((chunk) => [...chunk].map((file) => `<file>${file}</file>`).join("\n")),
-          )
+          const rendered = yield* Skill.render(info)
 
           return {
             title: `Loaded skill: ${info.name}`,
-            output: [
-              `<skill_content name="${info.name}">`,
-              `# Skill: ${info.name}`,
-              "",
-              info.content.trim(),
-              "",
-              `Base directory for this skill: ${base}`,
-              "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
-              "Note: file list is sampled.",
-              "",
-              "<skill_files>",
-              files,
-              "</skill_files>",
-              "</skill_content>",
-            ].join("\n"),
+            output: rendered.output,
             metadata: {
               name: info.name,
-              dir,
+              dir: rendered.dir,
             },
           }
         }).pipe(Effect.orDie),

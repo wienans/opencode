@@ -3,12 +3,13 @@ import { FetchHttpClient } from "effect/unstable/http"
 import { expect } from "bun:test"
 import { Cause, Effect, Exit, Fiber, Layer } from "effect"
 import path from "path"
-import { fileURLToPath } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { Bus } from "../../src/bus"
 import { Command } from "../../src/command"
 import { Config } from "@/config/config"
+import { InstanceState } from "@/effect/instance-state"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
 import { Permission } from "../../src/permission"
@@ -1326,6 +1327,55 @@ unix(
           }),
         },
       ),
+    ),
+  30_000,
+)
+
+it.live(
+  "skill commands load skill context and append trailing prompt text",
+  () =>
+    provideTmpdirServer(
+      ({ llm }) =>
+        Effect.gen(function* () {
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const skillDir = path.join((yield* InstanceState.context).directory, ".opencode", "skill", "slash-skill")
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(skillDir, "SKILL.md"),
+                `---
+name: slash-skill
+description: Skill command regression coverage.
+---
+
+Use notes.txt from this skill when answering.
+`,
+              ),
+              Bun.write(path.join(skillDir, "notes.txt"), "skill notes"),
+            ]),
+          )
+          const chat = yield* sessions.create({
+            title: "Pinned",
+            permission: [{ permission: "skill", pattern: "*", action: "allow" }],
+          })
+          yield* llm.text("done")
+
+          const result = yield* prompt.command({
+            sessionID: chat.id,
+            command: "slash-skill",
+            arguments: "follow up prompt",
+          })
+
+          expect(result.info.role).toBe("assistant")
+          const inputs = yield* llm.inputs
+          const messages = JSON.stringify(inputs.at(-1)?.messages)
+          expect(messages).toContain(`<skill_content name="slash-skill">`)
+          expect(messages).toContain(`Base directory for this skill: ${pathToFileURL(skillDir).href}`)
+          expect(messages).toContain(path.join(skillDir, "notes.txt"))
+          expect(messages).toContain("follow up prompt")
+        }),
+      { git: true, config: providerCfg },
     ),
   30_000,
 )
