@@ -1554,14 +1554,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const info = yield* skill.get(input.command)
           if (!info) return input.arguments.trim()
           const rendered = yield* Skill.render(info)
-          return [rendered.output, input.arguments.trim()].filter(Boolean).join("\n\n")
+          if (!input.arguments.trim()) return rendered.output
+          return `${rendered.output}\n\n${input.arguments.trim()}`
         }
 
         const raw = input.arguments.match(argsRegex) ?? []
         const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
         const templateCommand = yield* Effect.promise(async () => cmd.template)
         const placeholders = templateCommand.match(placeholderRegex) ?? []
-        const last = Math.max(0, ...placeholders.map((item) => Number(item.slice(1))))
+        const last = placeholders.length === 0 ? 0 : Math.max(...placeholders.map((item) => Number(item.slice(1))))
         const withArgs = templateCommand.replaceAll(placeholderRegex, (_, index) => {
           const position = Number(index)
           const argIndex = position - 1
