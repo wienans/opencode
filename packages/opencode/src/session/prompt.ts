@@ -1561,7 +1561,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
         const templateCommand = yield* Effect.promise(async () => cmd.template)
         const placeholders = templateCommand.match(placeholderRegex) ?? []
-        const last = placeholders.reduce((max, item) => Math.max(max, Number(item.slice(1))), 0)
+        const last = Math.max(0, ...placeholders.map((item) => Number(item.slice(1))))
         const withArgs = templateCommand.replaceAll(placeholderRegex, (_, index) => {
           const position = Number(index)
           const argIndex = position - 1

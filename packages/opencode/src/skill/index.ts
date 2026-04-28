@@ -93,6 +93,7 @@ export const render = Effect.fn("Skill.render")(function* (info: Info) {
         .map((file) => `<file>${file}</file>`)
         .join("\n"),
     ),
+    Effect.catch(() => Effect.succeed("")),
   )
 
   return {
