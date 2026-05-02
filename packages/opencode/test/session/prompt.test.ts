@@ -165,6 +165,7 @@ function makeHttp() {
     Plugin.defaultLayer,
     Config.defaultLayer,
     ProviderSvc.defaultLayer,
+    Skill.defaultLayer,
     lsp,
     mcp,
     AppFileSystem.defaultLayer,
@@ -1355,10 +1356,7 @@ Use notes.txt from this skill when answering.
               Bun.write(path.join(skillDir, "notes.txt"), "skill notes"),
             ]),
           )
-          const chat = yield* sessions.create({
-            title: "Pinned",
-            permission: [{ permission: "skill", pattern: "*", action: "allow" }],
-          })
+          const chat = yield* sessions.create({ title: "Pinned" })
           yield* llm.text("done")
 
           const result = yield* prompt.command({
@@ -1369,13 +1367,74 @@ Use notes.txt from this skill when answering.
 
           expect(result.info.role).toBe("assistant")
           const inputs = yield* llm.inputs
-          const messages = JSON.stringify(inputs.at(-1)?.messages)
-          expect(messages).toContain(`<skill_content name="slash-skill">`)
-          expect(messages).toContain(`Base directory for this skill: ${pathToFileURL(skillDir).href}`)
-          expect(messages).toContain(path.join(skillDir, "notes.txt"))
-          expect(messages).toContain("follow up prompt")
+          const input = inputs.at(-1) as { messages: Array<{ content?: unknown }> } | undefined
+          const message = String(input?.messages.at(-1)?.content)
+          expect(message).toContain(`<skill_content name="slash-skill">`)
+          expect(message).toContain(`Base directory for this skill: ${pathToFileURL(skillDir).href}`)
+          expect(message).toContain(path.join(skillDir, "notes.txt"))
+          expect(message).toContain("follow up prompt")
         }),
       { git: true, config: providerCfg },
+    ),
+  30_000,
+)
+
+it.live(
+  "skill commands bypass agent skill denials when invoked explicitly",
+  () =>
+    provideTmpdirServer(
+      ({ llm }) =>
+        Effect.gen(function* () {
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const skillDir = path.join((yield* InstanceState.context).directory, ".opencode", "skill", "slash-skill")
+          yield* Effect.promise(() =>
+            Promise.all([
+              Bun.write(
+                path.join(skillDir, "SKILL.md"),
+                `---
+name: slash-skill
+description: Skill command regression coverage.
+---
+
+Use notes.txt from this skill when answering.
+`,
+              ),
+              Bun.write(path.join(skillDir, "notes.txt"), "skill notes"),
+            ]),
+          )
+          const chat = yield* sessions.create({ title: "Pinned" })
+          yield* llm.text("done")
+
+          const result = yield* prompt.command({
+            sessionID: chat.id,
+            agent: "restricted",
+            command: "slash-skill",
+            arguments: "follow up prompt",
+          })
+
+          expect(result.info.role).toBe("assistant")
+          const inputs = yield* llm.inputs
+          const input = inputs.at(-1) as { messages: Array<{ content?: unknown }> } | undefined
+          const message = String(input?.messages.at(-1)?.content)
+          expect(message).toContain(`<skill_content name="slash-skill">`)
+          expect(message).toContain(`Base directory for this skill: ${pathToFileURL(skillDir).href}`)
+          expect(message).toContain(path.join(skillDir, "notes.txt"))
+          expect(message).toContain("follow up prompt")
+        }),
+      {
+        git: true,
+        config: (url) => ({
+          ...providerCfg(url),
+          agent: {
+            restricted: {
+              permission: {
+                skill: "deny",
+              },
+            },
+          },
+        }),
+      },
     ),
   30_000,
 )

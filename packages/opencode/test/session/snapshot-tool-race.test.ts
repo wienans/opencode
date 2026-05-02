@@ -117,6 +117,7 @@ function makeHttp() {
     Plugin.defaultLayer,
     Config.defaultLayer,
     ProviderSvc.defaultLayer,
+    Skill.defaultLayer,
     lsp,
     mcp,
     AppFileSystem.defaultLayer,

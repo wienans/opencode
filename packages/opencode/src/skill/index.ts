@@ -1,4 +1,5 @@
 import path from "path"
+import { readdir } from "fs/promises"
 import { pathToFileURL } from "url"
 import z from "zod"
 import { Effect, Layer, Context, Schema } from "effect"
@@ -73,26 +74,39 @@ export interface Interface {
   readonly available: (agent?: Agent.Info) => Effect.Effect<Info[]>
 }
 
+const FILE_SAMPLE_LIMIT = 10
+
 export const render = Effect.fn("Skill.render")(function* (info: Info) {
   const dir = path.dirname(info.location)
   const files = yield* Effect.tryPromise({
-    try: () =>
-      Glob.scan("**/*", {
-        cwd: dir,
-        absolute: true,
-        include: "file",
-        dot: true,
-        symlink: true,
-      }),
+    try: async () => {
+      const sample: string[] = []
+      const pending = [dir]
+
+      while (pending.length > 0 && sample.length < FILE_SAMPLE_LIMIT) {
+        const current = pending.shift()!
+        const entries = (await readdir(current, { withFileTypes: true }).catch(() => []))
+          .toSorted((a, b) => a.name.localeCompare(b.name))
+
+        for (const entry of entries) {
+          const filepath = path.join(current, entry.name)
+          if (entry.isDirectory()) {
+            pending.push(filepath)
+            continue
+          }
+
+          if (!entry.isFile() && !entry.isSymbolicLink()) continue
+          if (entry.name === "SKILL.md") continue
+
+          sample.push(filepath)
+          if (sample.length >= FILE_SAMPLE_LIMIT) break
+        }
+      }
+
+      return sample.map((file) => `<file>${file}</file>`).join("\n")
+    },
     catch: (error) => error,
   }).pipe(
-    Effect.map((files) =>
-      files
-        .filter((file) => !file.endsWith(`${path.sep}SKILL.md`))
-        .slice(0, 10)
-        .map((file) => `<file>${file}</file>`)
-        .join("\n"),
-    ),
     Effect.catch(() => Effect.succeed("")),
   )
 

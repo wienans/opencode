@@ -1529,7 +1529,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         throw error
       }
       const agentName = cmd.agent ?? input.agent ?? (yield* agents.defaultAgent())
-      const session = yield* sessions.get(input.sessionID)
       const agent = yield* agents.get(agentName)
       if (!agent) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -1541,16 +1540,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
       const template = yield* Effect.gen(function* () {
         if (cmd.source === "skill") {
-          yield* permission
-            .ask({
-              sessionID: input.sessionID,
-              permission: "skill",
-              patterns: [input.command],
-              always: [input.command],
-              metadata: {},
-              ruleset: Permission.merge(agent.permission, session.permission ?? []),
-            })
-            .pipe(Effect.orDie)
           const info = yield* skill.get(input.command)
           if (!info) return input.arguments.trim()
           const rendered = yield* Skill.render(info)
@@ -1671,6 +1660,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Config.defaultLayer),
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(AppFileSystem.defaultLayer),
+    Layer.provide(Skill.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(Session.defaultLayer),
     Layer.provide(SessionRevert.defaultLayer),
